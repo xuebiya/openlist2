@@ -16,6 +16,16 @@ import (
 // MediaLogger 是一个专门记录媒体文件访问的日志中间件
 // 它会完全替代原有的日志系统
 
+// 初始化日志格式
+func init() {
+	// 设置日志格式为纯文本，不带颜色
+	log.SetFormatter(&log.TextFormatter{
+		DisableColors: true,
+		DisableTimestamp: true, // 禁用默认时间戳，我们将自己格式化
+		FullTimestamp: false,
+	})
+}
+
 // 支持的媒体文件扩展名
 var mediaExtensions = map[string]bool{
 	// 图片格式
@@ -78,20 +88,49 @@ type fsGetResponse struct {
 	Data    fsObject `json:"data"`
 }
 
+// 获取用户名
+func getUserName(c *gin.Context) string {
+	// 尝试从会话或认证信息中获取用户名
+	username, exists := c.Get("username")
+	if exists {
+		if usernameStr, ok := username.(string); ok && usernameStr != "" {
+			return usernameStr
+		}
+	}
+	
+	// 尝试从Cookie获取
+	cookie, err := c.Cookie("username")
+	if err == nil && cookie != "" {
+		return cookie
+	}
+	
+	// 尝试从Authorization头获取
+	authHeader := c.GetHeader("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		// 这里可以解析JWT token获取用户名
+		// 简化处理，仅作示例
+		return "已认证用户"
+	}
+	
+	// 如果无法获取用户名，返回未知用户
+	return "未知用户"
+}
+
 // 格式化日志信息为标准格式
-func formatMediaLog(timestamp time.Time, clientIP string, filePath string) string {
-	// 格式化为"时间：XXXX年X月X日 访问IP：XXX.XXX.XXX.XXX 访问路径：XXX.mp4"
-	return fmt.Sprintf("时间：%s 访问IP：%s 访问路径：%s", 
+func formatMediaLog(timestamp time.Time, clientIP string, filePath string, username string) string {
+	// 格式化为"时间：XXXX年X月X日 访问IP：XXX.XXX.XXX.XXX 访问路径：XXX.mp4 用户：XXX"
+	return fmt.Sprintf("时间：%s 访问IP：%s 访问路径：%s 用户：%s", 
 		timestamp.Format("2006年1月2日 15:04:05"), 
 		clientIP, 
-		filePath)
+		filePath,
+		username)
 }
 
 // 输出日志到前台和日志文件
-func logMediaAccess(timestamp time.Time, clientIP string, filePath string) {
-	logMsg := formatMediaLog(timestamp, clientIP, filePath)
+func logMediaAccess(timestamp time.Time, clientIP string, filePath string, username string) {
+	logMsg := formatMediaLog(timestamp, clientIP, filePath, username)
 	
-	// 输出到日志文件
+	// 输出到日志文件 - 使用纯文本格式，不带前缀
 	log.Info(logMsg)
 	
 	// 输出到前台控制台
@@ -116,9 +155,10 @@ func MediaLoggerMiddleware() gin.HandlerFunc {
 			c.Next()
 			
 			clientIP := c.ClientIP()
+			username := getUserName(c)
 			
 			// 使用新的日志格式记录
-			logMediaAccess(time.Now(), clientIP, path)
+			logMediaAccess(time.Now(), clientIP, path, username)
 			return
 		}
 
@@ -192,10 +232,11 @@ func handleFSListRequest(c *gin.Context) {
 	// 如果包含媒体文件，记录日志
 	if hasMediaFile {
 		clientIP := c.ClientIP()
+		username := getUserName(c)
 		
 		// 对每个媒体文件记录一条日志
 		for _, mediaPath := range mediaFiles {
-			logMediaAccess(time.Now(), clientIP, mediaPath)
+			logMediaAccess(time.Now(), clientIP, mediaPath, username)
 		}
 	}
 }
@@ -237,9 +278,10 @@ func handleFSGetRequest(c *gin.Context) {
 	if resp.Code == 200 && isMediaFileName(resp.Data.Name) {
 		clientIP := c.ClientIP()
 		mediaPath := resp.Data.Path
+		username := getUserName(c)
 		
 		// 使用新的日志格式记录
-		logMediaAccess(time.Now(), clientIP, mediaPath)
+		logMediaAccess(time.Now(), clientIP, mediaPath, username)
 	}
 }
 
@@ -355,7 +397,8 @@ func MediaLoggerWithDebug() gin.HandlerFunc {
 		// 记录媒体文件访问日志
 		if isMedia {
 			clientIP := c.ClientIP()
-			logMediaAccess(time.Now(), clientIP, mediaFilePath)
+			username := getUserName(c)
+			logMediaAccess(time.Now(), clientIP, mediaFilePath, username)
 		}
 	}
 } 
