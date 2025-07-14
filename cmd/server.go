@@ -48,6 +48,8 @@ the address is defined in config file`,
 			gin.SetMode(gin.ReleaseMode)
 		}
 		r := gin.New()
+		// 启用日志过滤器调试模式
+		middlewares.EnableDebugMode()
 		r.Use(middlewares.FilteredLogger(log.StandardLogger().Out), gin.RecoveryWithWriter(log.StandardLogger().Out))
 		server.Init(r)
 		var httpHandler http.Handler = r

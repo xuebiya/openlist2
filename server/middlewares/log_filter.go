@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
 )
 
 // 支持的视频和图片文件扩展名
@@ -44,6 +45,18 @@ var supportedExtensions = map[string]bool{
 	".m3u8": true,
 }
 
+// 要过滤的API路径
+var apiPathsToFilter = []string{
+	"/api/fs/list",
+	"/api/fs/get",
+	"/api/me",
+	"/api/public",
+	"/api/auth",
+	"/api/admin",
+	"/api/fs/other",
+	"/api/fs/dirs",
+}
+
 // 检查路径是否为支持的媒体文件
 func isMediaFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
@@ -62,21 +75,27 @@ func getMediaExtensions() []string {
 
 // 用于匹配 API 路径的正则表达式
 var (
-	listApiRegex    *regexp.Regexp
-	getApiRegex     *regexp.Regexp
+	apiRegexes      []*regexp.Regexp
 	pathRegex       *regexp.Regexp
 	regexInitOnce   sync.Once
+	debugMode       = false // 设置为true可以输出调试信息
 )
 
 // 初始化正则表达式
 func initRegex() {
 	regexInitOnce.Do(func() {
-		listApiRegex = regexp.MustCompile(`POST\s+"/api/fs/list"`)
-		getApiRegex = regexp.MustCompile(`POST\s+"/api/fs/get"`)
+		// 为每个API路径创建正则表达式
+		apiRegexes = make([]*regexp.Regexp, len(apiPathsToFilter))
+		for i, path := range apiPathsToFilter {
+			// 匹配任何HTTP方法访问该API路径
+			apiRegexes[i] = regexp.MustCompile(`\s+"` + path)
+		}
 		
 		// 构建媒体文件扩展名模式
 		extensionsPattern := strings.Join(getMediaExtensions(), "|")
-		pathRegex = regexp.MustCompile(`"([^"]+\.(` + extensionsPattern + `))"`)
+		
+		// 更宽松的媒体文件路径匹配模式
+		pathRegex = regexp.MustCompile(`[^a-zA-Z0-9](` + extensionsPattern + `)[^a-zA-Z0-9]`)
 	})
 }
 
@@ -94,31 +113,64 @@ func (w *LoggerFilterWriter) Write(p []byte) (n int, err error) {
 	
 	// 检查这是否是一个 GIN 日志行
 	if strings.Contains(logLine, "[GIN]") {
-		// 检查是否是 API 调用
-		isListApi := listApiRegex.MatchString(logLine)
-		isGetApi := getApiRegex.MatchString(logLine)
+		// 检查是否是需要过滤的API调用
+		isApiCall := false
+		for _, regex := range apiRegexes {
+			if regex.MatchString(logLine) {
+				isApiCall = true
+				break
+			}
+		}
 		
-		// 如果是 API 调用
-		if isListApi || isGetApi {
-			// 查找日志中是否包含媒体文件路径
-			matches := pathRegex.FindStringSubmatch(logLine)
-			if len(matches) > 0 {
-				// 找到媒体文件路径，记录日志
+		// 如果是API调用
+		if isApiCall {
+			// 检查是否包含媒体文件扩展名
+			hasMediaExt := false
+			for ext := range supportedExtensions {
+				if strings.Contains(strings.ToLower(logLine), ext) {
+					hasMediaExt = true
+					break
+				}
+			}
+			
+			// 使用正则表达式再次检查
+			if !hasMediaExt {
+				hasMediaExt = pathRegex.MatchString(strings.ToLower(logLine))
+			}
+			
+			// 如果包含媒体文件扩展名，记录日志
+			if hasMediaExt {
+				if debugMode {
+					log.Debugf("记录媒体文件API访问日志: %s", logLine)
+				}
 				return w.Writer.Write(p)
 			}
 			
 			// 没有找到媒体文件路径，忽略此日志
+			if debugMode {
+				log.Debugf("过滤API访问日志: %s", logLine)
+			}
 			return len(p), nil
 		}
 		
-		// 如果是静态资源路径（通常包含 /assets/ 或 /images/），不记录
+		// 如果是静态资源路径，不记录
 		if strings.Contains(logLine, "/assets/") || 
 		   strings.Contains(logLine, "/images/") || 
 		   strings.Contains(logLine, "/favicon.ico") {
 			return len(p), nil
 		}
 		
-		// 其他 GIN 日志行（非 API 调用和非静态资源）记录
+		// 检查是否是直接访问媒体文件的路径
+		for ext := range supportedExtensions {
+			if strings.Contains(strings.ToLower(logLine), ext) {
+				if debugMode {
+					log.Debugf("记录直接媒体文件访问日志: %s", logLine)
+				}
+				return w.Writer.Write(p)
+			}
+		}
+		
+		// 其他 GIN 日志行记录
 		return w.Writer.Write(p)
 	}
 	
@@ -146,31 +198,45 @@ func FilteredLogger(writer io.Writer) gin.HandlerFunc {
 				param.Latency = param.Latency.Truncate(time.Second)
 			}
 			
-			// 检查是否为媒体文件路径的访问
-			isMediaPath := false
 			path := param.Path
 			
-			// 检查路径是否为 API 调用
-			isListOrGetApi := strings.HasPrefix(path, "/api/fs/list") || 
-			                 strings.HasPrefix(path, "/api/fs/get")
+			// 检查是否为API调用
+			isApiCall := false
+			for _, apiPath := range apiPathsToFilter {
+				if strings.HasPrefix(path, apiPath) {
+					isApiCall = true
+					break
+				}
+			}
 			
-			if isListOrGetApi {
-				// 对于 API 调用，检查请求体或 URL 是否包含媒体文件路径
-				isMediaPath = containsMediaPath(param.Request.URL.String())
-			} else {
-				// 对于直接访问文件的请求，检查路径是否为媒体文件
-				isMediaPath = isMediaFile(path)
+			// 如果是API调用，检查是否包含媒体文件路径
+			if isApiCall {
+				// 从请求体、URL或响应中检查媒体文件扩展名
+				hasMediaExt := false
+				
+				// 检查URL
+				urlStr := param.Request.URL.String()
+				for ext := range supportedExtensions {
+					if strings.Contains(strings.ToLower(urlStr), ext) {
+						hasMediaExt = true
+						break
+					}
+				}
+				
+				// 如果没有找到媒体文件扩展名，不记录
+				if !hasMediaExt {
+					return ""
+				}
+				
+				if debugMode {
+					log.Debugf("记录媒体文件API访问: %s", path)
+				}
 			}
 			
 			// 忽略静态资源路径
 			if strings.Contains(path, "/assets/") || 
 			   strings.Contains(path, "/images/") || 
 			   strings.Contains(path, "/favicon.ico") {
-				return ""
-			}
-			
-			// 如果是 API 调用但不包含媒体文件路径，不记录
-			if isListOrGetApi && !isMediaPath {
 				return ""
 			}
 			
@@ -190,12 +256,13 @@ func FilteredLogger(writer io.Writer) gin.HandlerFunc {
 	})
 }
 
-// 检查请求URL或日志行中是否包含媒体文件路径
-func containsMediaPath(s string) bool {
-	// 确保正则表达式已初始化
-	initRegex()
-	
-	// 尝试使用正则表达式查找媒体文件路径
-	matches := pathRegex.FindStringSubmatch(s)
-	return len(matches) > 0
+// EnableDebugMode 启用调试模式，输出更多日志信息
+func EnableDebugMode() {
+	debugMode = true
+	log.Info("日志过滤器调试模式已启用")
+}
+
+// DisableDebugMode 禁用调试模式
+func DisableDebugMode() {
+	debugMode = false
 } 
