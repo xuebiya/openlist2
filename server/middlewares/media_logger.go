@@ -3,9 +3,7 @@ package middlewares
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
-	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -179,7 +177,7 @@ func handleFSListRequest(c *gin.Context) {
 	
 	if resp.Code == 200 && len(resp.Content) > 0 {
 		for _, item := range resp.Content {
-			if isMediaFile(item.Name) {
+			if isMediaFileName(item.Name) {
 				hasMediaFile = true
 				mediaFiles = append(mediaFiles, item.Name)
 			}
@@ -245,7 +243,7 @@ func handleFSGetRequest(c *gin.Context) {
 	}
 
 	// 检查响应中是否包含媒体文件
-	if resp.Code == 200 && isMediaFile(resp.Data.Name) {
+	if resp.Code == 200 && isMediaFileName(resp.Data.Name) {
 		clientIP := c.ClientIP()
 		method := c.Request.Method
 		statusCode := responseWriter.Status()
@@ -270,7 +268,7 @@ func isMediaFilePath(path string) bool {
 }
 
 // 检查文件名是否为媒体文件
-func isMediaFile(filename string) bool {
+func isMediaFileName(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	return mediaExtensions[ext]
 }
