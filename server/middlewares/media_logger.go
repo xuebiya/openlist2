@@ -3,7 +3,9 @@ package middlewares
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -77,6 +79,26 @@ type fsGetResponse struct {
 	Data    fsObject `json:"data"`
 }
 
+// 格式化日志信息为标准格式
+func formatMediaLog(timestamp time.Time, clientIP string, filePath string) string {
+	// 格式化为"时间：XXXX年X月X日 访问IP：XXX.XXX.XXX.XXX 访问路径：XXX.mp4"
+	return fmt.Sprintf("时间：%s 访问IP：%s 访问路径：%s", 
+		timestamp.Format("2006年1月2日 15:04:05"), 
+		clientIP, 
+		filePath)
+}
+
+// 输出日志到前台和日志文件
+func logMediaAccess(timestamp time.Time, clientIP string, filePath string) {
+	logMsg := formatMediaLog(timestamp, clientIP, filePath)
+	
+	// 输出到日志文件
+	log.Info(logMsg)
+	
+	// 输出到前台控制台
+	fmt.Println(logMsg)
+}
+
 // MediaLoggerMiddleware 返回一个只记录媒体文件访问的日志中间件
 func MediaLoggerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -94,20 +116,11 @@ func MediaLoggerMiddleware() gin.HandlerFunc {
 			// 记录直接访问媒体文件的日志
 			start := time.Now()
 			c.Next()
-			latency := time.Since(start)
 			
 			clientIP := c.ClientIP()
-			method := c.Request.Method
-			statusCode := c.Writer.Status()
 			
-			log.Infof("[GIN] %v | %3d | %13v | %15s | %-7s %s | 直接访问媒体文件",
-				time.Now().Format("2006/01/02 - 15:04:05"),
-				statusCode,
-				latency,
-				clientIP,
-				method,
-				path,
-			)
+			// 使用新的日志格式记录
+			logMediaAccess(time.Now(), clientIP, path)
 			return
 		}
 
@@ -155,9 +168,6 @@ func handleFSListRequest(c *gin.Context) {
 	// 处理请求
 	c.Next()
 	
-	// 计算延迟时间
-	latency := time.Since(start)
-	
 	// 检查请求体中是否包含媒体文件路径
 	var req fsRequest
 	if len(requestBody) > 0 {
@@ -179,7 +189,7 @@ func handleFSListRequest(c *gin.Context) {
 		for _, item := range resp.Content {
 			if isMediaFileName(item.Name) {
 				hasMediaFile = true
-				mediaFiles = append(mediaFiles, item.Name)
+				mediaFiles = append(mediaFiles, item.Path+"/"+item.Name)
 			}
 		}
 	}
@@ -187,19 +197,11 @@ func handleFSListRequest(c *gin.Context) {
 	// 如果包含媒体文件，记录日志
 	if hasMediaFile {
 		clientIP := c.ClientIP()
-		method := c.Request.Method
-		statusCode := responseWriter.Status()
 		
-		log.Infof("[GIN] %v | %3d | %13v | %15s | %-7s %s | 目录: %s | 媒体文件: %v",
-			time.Now().Format("2006/01/02 - 15:04:05"),
-			statusCode,
-			latency,
-			clientIP,
-			method,
-			c.Request.URL.Path,
-			req.Path,
-			mediaFiles,
-		)
+		// 对每个媒体文件记录一条日志
+		for _, mediaPath := range mediaFiles {
+			logMediaAccess(time.Now(), clientIP, mediaPath)
+		}
 	}
 }
 
@@ -220,14 +222,8 @@ func handleFSGetRequest(c *gin.Context) {
 	}
 	c.Writer = responseWriter
 
-	// 记录开始时间
-	start := time.Now()
-	
 	// 处理请求
 	c.Next()
-	
-	// 计算延迟时间
-	latency := time.Since(start)
 	
 	// 检查请求体中是否包含媒体文件路径
 	var req fsRequest
@@ -245,19 +241,10 @@ func handleFSGetRequest(c *gin.Context) {
 	// 检查响应中是否包含媒体文件
 	if resp.Code == 200 && isMediaFileName(resp.Data.Name) {
 		clientIP := c.ClientIP()
-		method := c.Request.Method
-		statusCode := responseWriter.Status()
+		mediaPath := resp.Data.Path
 		
-		log.Infof("[GIN] %v | %3d | %13v | %15s | %-7s %s | 访问媒体文件: %s | 路径: %s",
-			time.Now().Format("2006/01/02 - 15:04:05"),
-			statusCode,
-			latency,
-			clientIP,
-			method,
-			c.Request.URL.Path,
-			resp.Data.Name,
-			resp.Data.Path,
-		)
+		// 使用新的日志格式记录
+		logMediaAccess(time.Now(), clientIP, mediaPath)
 	}
 }
 
@@ -311,16 +298,6 @@ func MediaLoggerWithDebug() gin.HandlerFunc {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
 		}
 		
-		// 记录请求信息
-		if raw != "" {
-			path = path + "?" + raw
-		}
-		
-		log.Debugf("[请求] %s %s", c.Request.Method, path)
-		if len(requestBody) > 0 {
-			log.Debugf("[请求体] %s", string(requestBody))
-		}
-		
 		// 创建响应体捕获器
 		responseWriter := &responseBodyWriter{
 			ResponseWriter: c.Writer,
@@ -328,17 +305,12 @@ func MediaLoggerWithDebug() gin.HandlerFunc {
 		}
 		c.Writer = responseWriter
 		
-		// 记录开始时间
-		start := time.Now()
-		
 		// 处理请求
 		c.Next()
 		
-		// 计算延迟时间
-		latency := time.Since(start)
-		
 		// 检查是否为媒体文件访问
 		isMedia := false
+		mediaFilePath := path
 		
 		// 检查路径
 		if isMediaFilePath(path) {
@@ -347,11 +319,14 @@ func MediaLoggerWithDebug() gin.HandlerFunc {
 		
 		// 检查请求体
 		if !isMedia && len(requestBody) > 0 {
-			reqStr := strings.ToLower(string(requestBody))
-			for ext := range mediaExtensions {
-				if strings.Contains(reqStr, ext) {
-					isMedia = true
-					break
+			var req fsRequest
+			if err := json.Unmarshal(requestBody, &req); err == nil && req.Path != "" {
+				if strings.Contains(req.Path, ".") {
+					ext := strings.ToLower(filepath.Ext(req.Path))
+					if mediaExtensions[ext] {
+						isMedia = true
+						mediaFilePath = req.Path
+					}
 				}
 			}
 		}
@@ -359,40 +334,34 @@ func MediaLoggerWithDebug() gin.HandlerFunc {
 		// 检查响应体
 		responseData := responseWriter.body.Bytes()
 		if !isMedia && len(responseData) > 0 {
-			respStr := strings.ToLower(string(responseData))
-			for ext := range mediaExtensions {
-				if strings.Contains(respStr, ext) {
-					isMedia = true
-					break
+			// 尝试解析为列表响应
+			var listResp fsListResponse
+			if err := json.Unmarshal(responseData, &listResp); err == nil && listResp.Code == 200 {
+				for _, item := range listResp.Content {
+					if isMediaFileName(item.Name) {
+						isMedia = true
+						mediaFilePath = item.Path + "/" + item.Name
+						break
+					}
+				}
+			}
+			
+			// 尝试解析为单文件响应
+			if !isMedia {
+				var getResp fsGetResponse
+				if err := json.Unmarshal(responseData, &getResp); err == nil && getResp.Code == 200 {
+					if isMediaFileName(getResp.Data.Name) {
+						isMedia = true
+						mediaFilePath = getResp.Data.Path
+					}
 				}
 			}
 		}
 		
-		// 记录响应信息
-		statusCode := responseWriter.Status()
-		clientIP := c.ClientIP()
-		method := c.Request.Method
-		
+		// 记录媒体文件访问日志
 		if isMedia {
-			log.Infof("[GIN] %v | %3d | %13v | %15s | %-7s %s | 媒体文件访问",
-				time.Now().Format("2006/01/02 - 15:04:05"),
-				statusCode,
-				latency,
-				clientIP,
-				method,
-				path,
-			)
-			
-			// 输出更详细的调试信息
-			log.Debugf("[响应] 状态码: %d, 延迟: %v", statusCode, latency)
-			if len(responseData) > 0 && len(responseData) < 1000 {
-				log.Debugf("[响应体] %s", string(responseData))
-			} else if len(responseData) >= 1000 {
-				log.Debugf("[响应体] (长度: %d) %s...", len(responseData), string(responseData[:1000]))
-			}
-		} else {
-			// 对于非媒体文件访问，只记录调试信息
-			log.Debugf("[响应] %s %s | 状态码: %d, 延迟: %v", method, path, statusCode, latency)
+			clientIP := c.ClientIP()
+			logMediaAccess(time.Now(), clientIP, mediaFilePath)
 		}
 	}
 } 
