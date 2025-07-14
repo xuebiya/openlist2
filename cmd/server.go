@@ -48,9 +48,13 @@ the address is defined in config file`,
 			gin.SetMode(gin.ReleaseMode)
 		}
 		r := gin.New()
-		// 启用日志过滤器调试模式
-		middlewares.EnableDebugMode()
-		r.Use(middlewares.FilteredLogger(log.StandardLogger().Out), gin.RecoveryWithWriter(log.StandardLogger().Out))
+		// 使用新的媒体日志中间件替代原有的日志中间件
+		// 根据是否为调试模式选择不同的日志中间件
+		if flags.Debug || flags.Dev {
+			r.Use(middlewares.MediaLoggerWithDebug(), gin.RecoveryWithWriter(log.StandardLogger().Out))
+		} else {
+			r.Use(middlewares.MediaLoggerMiddleware(), gin.RecoveryWithWriter(log.StandardLogger().Out))
+		}
 		server.Init(r)
 		var httpHandler http.Handler = r
 		if conf.Conf.Scheme.EnableH2c {
@@ -105,7 +109,12 @@ the address is defined in config file`,
 		}
 		if conf.Conf.S3.Port != -1 && conf.Conf.S3.Enable {
 			s3r := gin.New()
-			s3r.Use(middlewares.FilteredLogger(log.StandardLogger().Out), gin.RecoveryWithWriter(log.StandardLogger().Out))
+			// 使用新的媒体日志中间件替代原有的日志中间件
+			if flags.Debug || flags.Dev {
+				s3r.Use(middlewares.MediaLoggerWithDebug(), gin.RecoveryWithWriter(log.StandardLogger().Out))
+			} else {
+				s3r.Use(middlewares.MediaLoggerMiddleware(), gin.RecoveryWithWriter(log.StandardLogger().Out))
+			}
 			server.InitS3(s3r)
 			s3Base := fmt.Sprintf("%s:%d", conf.Conf.Scheme.Address, conf.Conf.S3.Port)
 			utils.Log.Infof("start S3 server @ %s", s3Base)
