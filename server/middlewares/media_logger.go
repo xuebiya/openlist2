@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 )
@@ -90,25 +91,27 @@ type fsGetResponse struct {
 
 // 获取用户名
 func getUserName(c *gin.Context) string {
-	// 尝试从会话或认证信息中获取用户名
-	username, exists := c.Get("username")
+	// 尝试从上下文中获取用户对象
+	userObj, exists := c.Get("user")
 	if exists {
-		if usernameStr, ok := username.(string); ok && usernameStr != "" {
-			return usernameStr
+		// 检查是否可以转换为*model.User类型
+		if user, ok := userObj.(*model.User); ok && user != nil {
+			return user.Username
+		}
+		
+		// 尝试从map中获取username
+		if userMap, ok := userObj.(map[string]interface{}); ok {
+			if username, exists := userMap["username"]; exists {
+				if usernameStr, ok := username.(string); ok {
+					return usernameStr
+				}
+			}
 		}
 	}
 	
-	// 尝试从Cookie获取
-	cookie, err := c.Cookie("username")
-	if err == nil && cookie != "" {
-		return cookie
-	}
-	
-	// 尝试从Authorization头获取
+	// 尝试从Authorization头获取token并解析
 	authHeader := c.GetHeader("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
-		// 这里可以解析JWT token获取用户名
-		// 简化处理，仅作示例
 		return "已认证用户"
 	}
 	
