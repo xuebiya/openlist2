@@ -121,12 +121,12 @@ func getUserName(c *gin.Context) string {
 
 // 格式化日志信息为标准格式
 func formatMediaLog(timestamp time.Time, clientIP string, filePath string, username string) string {
-	// 格式化为"时间：XXXX年X月X日 访问IP：XXX.XXX.XXX.XXX 访问路径：XXX.mp4 用户：XXX"
-	return fmt.Sprintf("时间：%s 访问IP：%s 访问路径：%s 用户：%s", 
+	// 格式化为"时间：XXXX年X月X日 访问IP：XXX.XXX.XXX.XXX 用户：XXX 访问路径：XXX.mp4"
+	return fmt.Sprintf("时间：%s 访问IP：%s 用户：%s 访问路径：%s", 
 		timestamp.Format("2006年1月2日 15:04:05"), 
-		clientIP, 
-		filePath,
-		username)
+		clientIP,
+		username,
+		filePath)
 }
 
 // 输出日志到前台和日志文件
