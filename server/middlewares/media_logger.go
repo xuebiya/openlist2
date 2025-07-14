@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -114,7 +113,6 @@ func MediaLoggerMiddleware() gin.HandlerFunc {
 		// 检查是否是直接访问媒体文件的路径
 		if isMediaFilePath(path) {
 			// 记录直接访问媒体文件的日志
-			start := time.Now()
 			c.Next()
 			
 			clientIP := c.ClientIP()
@@ -161,9 +159,6 @@ func handleFSListRequest(c *gin.Context) {
 		body:           &bytes.Buffer{},
 	}
 	c.Writer = responseWriter
-
-	// 记录开始时间
-	start := time.Now()
 	
 	// 处理请求
 	c.Next()
@@ -288,7 +283,6 @@ func MediaLoggerWithDebug() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 记录所有请求的开始信息
 		path := c.Request.URL.Path
-		raw := c.Request.URL.RawQuery
 		
 		// 获取请求体
 		var requestBody []byte
